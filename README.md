@@ -56,7 +56,7 @@ Where the browser has WebXR, the menu has an **Enter VR** button. The scene is d
 - **Through a WebGL session**, which works in any browser that has both WebXR and WebGPU. Each eye's finished picture is copied over to WebGL, which costs some speed.
 - **Through the [WebXR/WebGPU binding](https://immersive-web.github.io/webxr-webgpu-binding/)**, without that copy. It is used where the browser has it, which so far means experimental settings: the WebXR experimental features in `chrome://flags` of Meta Quest Browser 146 or newer, *WebXR Projection Layers* and *WebXR/WebGPU Bindings* in Chrome on Windows, or Safari on visionOS 26.2 or newer.
 
-Chromium on Linux may also need *Unsafe WebGPU Support* and *Vulkan* turned on in `chrome://flags` before the scene loads at all. The page has to come from `https://` or `localhost` (WebXR does not work from a downloaded file).
+Chromium on Linux (seen on a Steam Frame) needs three settings in `chrome://flags`: *Unsafe WebGPU Support* and *Vulkan* for the scene to load at all, and *Choose ANGLE graphics backend* set to *Vulkan*, without which the headset stays black. Two eyes are a lot of work for a standalone headset: start on Low detail. After a session the menu shows the frame rate it reached. The page has to come from `https://` or `localhost` (WebXR does not work from a downloaded file).
 
 | | Controllers |
 |---|---|

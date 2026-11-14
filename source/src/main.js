@@ -244,8 +244,7 @@ const flyPts = [];
 const F = new Float64Array(32), P6 = new Float64Array(6);
 const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24, RY = 25, TX = 26, TY = 27, HX = 28, HY = 29, HZ = 30;
 // headset state: the session, its WebGPU binding, layer and reference space, and the head's own yaw in the room
-let xrS = null, xrB, xrL, xrRef, hyaw = 0, gl, xc, xctx, c2, c2x, xTex, xFB, x2d = 0, xN = 0, xNull = 0;
-const xPx = new Uint8Array(4);
+let xrS = null, xrB, xrL, xrRef, hyaw = 0, gl, xc, xctx, xN = 0, xNull = 0, xT0 = 0;
 // aim the camera from P6 = position + look-at point (in a headset the yaw is the room's: the head's comes on top)
 function aim() {
   const dx = P6[3] - P6[0], dy = P6[4] - P6[1], dz = P6[5] - P6[2];
@@ -482,35 +481,10 @@ function renderXR(pose) {
     F[UX] = c * m[4] - s * m[6]; F[UY] = m[5]; F[UZ] = s * m[4] + c * m[6];
     F[FX] = s * m[10] - c * m[8]; F[FY] = -m[9]; F[FZ] = -s * m[8] - c * m[10];
     setCam(p[0], p[5], p[8], p[9]);
-    if (L && location.hash === '#gltest') {
-      // test: WebGL alone, no WebGPU in the frame; left eye magenta, right eye green
-      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
-      gl.clearColor(1 - i, i, 1 - i, 1); gl.clear(gl.COLOR_BUFFER_BIT);
-    } else if (L) {
+    if (L) {
       draw(xctx.getCurrentTexture().createView(), !i, i === n - 1);
-      // x2d: by way of a 2D canvas, for browsers whose WebGL gets nothing out of a WebGPU canvas
-      // Probed frames note the GL error after each step, and what the copied texture holds (read through a
-      // framebuffer of its own, as the headset's may not be readable).
-      const probe = !i && (xN === 5 || xN === 70 || xN === 130), er = () => gl.getError().toString(16);
-      const rd = (x, y) => (gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, xPx), xPx.slice(0, 3).join('.'));
-      let lg = ''; if (probe) lg = `f${xN} ${x2d ? '2d' : 'direct'} lost ${gl.isContextLost()} fb ${gl.checkFramebufferStatus(gl.FRAMEBUFFER).toString(16)} e ${er()}`;
-      if (x2d) { if (c2.width !== W || c2.height !== H) { c2.width = W; c2.height = H; } c2x.drawImage(xc, 0, 0); }
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, x2d ? c2 : xc);
-      if (probe) {
-        lg += ` tex ${er()}`;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, xFB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, xTex, 0);
-        gl.disable(gl.SCISSOR_TEST);
-        const t = rd(W * 0.3 | 0, H * 0.3 | 0) + ' ' + rd(W >> 1, H >> 1) + ' ' + rd(W * 0.7 | 0, H * 0.7 | 0);
-        gl.enable(gl.SCISSOR_TEST);
-        lg += ` texpix ${t} ${er()}`; if (t === '0.0.0 0.0.0 0.0.0' && !x2d) x2d = 1;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, L.framebuffer);
-      }
-      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
-      // the first moment is plain magenta: seen in the headset, WebGL reaches it
-      if (xN < 30 || probe) { gl.clearColor(1, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
-      if (probe) lg += ` clear ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${er()}`;
-      if (xN >= 30) gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (probe) note(lg + ` draw ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${W}x${H}`);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, xc);
+      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height); gl.drawArrays(gl.TRIANGLES, 0, 3);
     } else draw(vOut, !i, i === n - 1, sub);
   }
   xN++;
@@ -760,7 +734,7 @@ document.addEventListener('pointerlockchange', () => xrS || ui(!document.pointer
 // pictures are copied (see renderXR).
 // The WebGL side of that: a program that draws a canvas as a texture over the viewport, top row first.
 const glInit = () => {
-  xc = document.createElement('canvas'); xctx = xc.getContext('webgpu'); c2 = document.createElement('canvas'); c2x = c2.getContext('2d');
+  xc = document.createElement('canvas'); xctx = xc.getContext('webgpu');
   // (context and layer as plain as every WebXR page makes them: with other options the layer came without an image)
   const o = { xrCompatible: true }, c = document.createElement('canvas');
   gl = c.getContext('webgl2', o) || c.getContext('webgl', o);
@@ -771,8 +745,7 @@ const glInit = () => {
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) note('GL: ' + gl.getProgramInfoLog(p));
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.bindTexture(gl.TEXTURE_2D, xTex = gl.createTexture()); xFB = gl.createFramebuffer();
-  note('GL: ' + (self.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext ? 2 : 1) + ' ' + gl.getParameter(gl.VERSION) + ' e ' + gl.getError().toString(16));
+  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
   for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
   gl.enable(gl.SCISSOR_TEST);
 };
@@ -795,21 +768,22 @@ bVR.onclick = async () => {
         s.updateRenderState({ layers: [xrL] });
       } else {
         xrB = null; if (!gl) glInit();
-        await gl.makeXRCompatible(); note('compat: lost ' + gl.isContextLost() + ' e ' + gl.getError().toString(16));
+        await gl.makeXRCompatible();
         s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl) });
       }
       xrRef = await s.requestReferenceSpace('local');
     } catch (e) { s.end(); throw e; }
     s.onselectstart = () => xSel++; s.onselectend = () => xSel--;
     s.onend = () => {
+      // how it went (and what went wrong), which a headset has no other place to show
+      const x = $('x'); x.hidden = false; x.textContent = `Last VR session: ${xrB0 ? 'binding' : 'webgl'} · ${(xN * 1e3 / (performance.now() - xT0)).toFixed(0)} fps · GPU ${F[GPU].toFixed(1)} ms · ${W}x${H} per eye · detail ${det.toFixed(2)}${xNull ? ' · ' + xNull + ' frames without pose' : ''}${xLog.length ? ' | ' + xLog.join(' | ') : ''}`; xLog.length = 0;
       // back to the screen, looking where the head did, at the resolution the screen had
       xrS = xrB = null; F[YAW] += hyaw; F[PIT] = hyaw = 0; pix = xSav[0]; det = xSav[1]; PER = 1e3 / 60; W = 0; resize();
       ui(true); requestAnimationFrame(frame);
-      const x = $('x'); x.hidden = false; x.textContent = `VR log: ${xrB0 ? 'binding' : 'webgl'}, ${xN} frames, ${xNull} without pose | ` + xLog.join(' | '); xLog.length = 0;
     };
     // two eyes: start at half the pixels each; frame() tunes them for the headset's rate from there
     xSav = [pix, det]; pix = max(PIXMIN, pix / 2); PER = 1e3 / (s.frameRate || 72);
-    xrS = s; xrB0 = xrB; xNew = 1; xSel = xW = W = xN = xNull = 0; F[PIT] = 0;
+    xrS = s; xrB0 = xrB; xNew = 1; xSel = xW = W = xN = xNull = 0; xT0 = performance.now(); F[PIT] = 0;
     ui(false); bDive.textContent = 'Resume';
     s.requestAnimationFrame(frame);
   } catch (e) { console.error(e); bVR.textContent = 'VR failed: ' + e.message; }
