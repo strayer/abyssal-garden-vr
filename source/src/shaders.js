@@ -151,6 +151,10 @@ fn kar(c: vec3f) -> vec4f { let w = 1. / (1. + max(c.r, max(c.g, c.b))); return 
   return (textureSampleLevel(t, s, uv + e * vec2f(-1., -1.), 0.) + textureSampleLevel(t, s, uv + e * vec2f(1., -1.), 0.)
         + textureSampleLevel(t, s, uv + e * vec2f(-1., 1.), 0.) + textureSampleLevel(t, s, uv + e * vec2f(1., 1.), 0.)) * .25;
 }
+// the whole texture scaled into the viewport (a headset's image for one eye)
+struct XO { @builtin(position) p: vec4f, @location(0) uv: vec2f };
+@vertex fn vsX(@builtin(vertex_index) i: u32) -> XO { let q = vec2f(f32(i & 1u), f32(i >> 1u)) * 2.; return XO(vec4f(q.x * 2. - 1., 1. - q.y * 2., 0., 1.), q); }
+@fragment fn fsX(o: XO) -> @location(0) vec4f { return textureSampleLevel(t, s, o.uv, 0.); }
 @fragment fn fsUp(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let uv = uvOf(fc, .5); let e = .75 / vec2f(textureDimensions(t));
   return (textureSampleLevel(t, s, uv + e * vec2f(-1., -1.), 0.) + textureSampleLevel(t, s, uv + e * vec2f(1., -1.), 0.)
@@ -768,7 +772,7 @@ fn sat3(x: vec3f) -> vec3f { return clamp(x, vec3f(0.), vec3f(1.)); }
   c = mix(c, bl, .06) + bl * .03;
   c *= g.mis.x;
   let q = uv - .5;
-  c *= 1. - dot(q, q) * .55;
+  c *= 1. - dot(q, q) * g.mis.w;
   c = tmap(c);
   let l0 = dot(c, vec3f(.2126, .7152, .0722));
   let l = mix(l0, l0 * l0 * (3. - 2. * l0), .55);

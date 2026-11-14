@@ -41,9 +41,10 @@ h1 {
   -webkit-background-clip: text; background-clip: text; filter: drop-shadow(0 .06em .2em #000c);
 }
 p { margin: 0; }
+[hidden] { display: none; }
 #a { display: grid; width: 27em; max-width: 100%; }
 #a > * { grid-area: 1/1; transition: opacity .8s, visibility .8s; }
-#s, #w, #q, #k, #h { font-size: .8em; letter-spacing: .12em; text-transform: uppercase; }
+#s, #w, #q, #k, #h, #x { font-size: .8em; letter-spacing: .12em; text-transform: uppercase; }
 #w { margin-top: 1.2em; color: #7ff3ff; text-wrap: balance; }
 
 /* loading bar */
@@ -127,6 +128,7 @@ svg { width: 1.5em; height: 1.5em; fill: currentColor; }
     <div id=l><div id=p><i id=b></i></div><p id=s>Diving…</p><p id=w hidden>Use Google Chrome for optimal performance</p></div>
     <div id=g>
       <button id=d>Dive in</button>
+      <button id=v hidden>Enter VR</button>
       <p id=q><span>Detail</span><button>Low</button><button>Medium</button><button>High</button></p>
       <div id=k>
         <p>
@@ -141,6 +143,7 @@ svg { width: 1.5em; height: 1.5em; fill: currentColor; }
           <i><b>H</b></i>Stats
         </p>
       </div>
+      <p id=x hidden>VR needs the experimental WebXR + WebGPU flags of this browser</p>
       <p id=h>Hold to swim forward · slide to steer · second finger to go faster</p>
     </div>
   </div>

@@ -17,7 +17,11 @@ const say = (m, to, ms) => {
 };
 const fail = (m) => { throw new Error(m, { cause: 1 }); }; // cause marks a message that is shown as it is
 if (!navigator.gpu) fail('This scene needs WebGPU. Try a current Chrome or Edge.');
-const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+// a headset can show the scene where the browser has the WebXR/WebGPU binding (see "headset" below); the graphics
+// adapter then has to be one the headset can use
+const xr = navigator.xr, hasVR = !!(xr && await xr.isSessionSupported('immersive-vr').catch(() => 0)), hasXR = hasVR && !!self.XRGPUBinding;
+const adapter = hasXR && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance', xrCompatible: true }).catch(() => 0)
+  || await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
 if (!adapter) fail('No WebGPU adapter found.');
 $('w').hidden = !!navigator.userAgentData; // only Chromium-based browsers have it
 const hasTS = adapter.features.has('timestamp-query');
@@ -234,12 +238,14 @@ const FLYN = FLY.length / 6, FLYT = 60, LUTN = 1024, flyLUT = new Float32Array(L
 const flyPts = [];
 // per-frame float state lives in one preallocated array, so the frame loop allocates no heap numbers
 const F = new Float64Array(32), P6 = new Float64Array(6);
-const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24;
-// aim the camera from P6 = position + look-at point
+const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24, RY = 25, TX = 26, TY = 27, HX = 28, HY = 29, HZ = 30;
+// headset state: the session, its WebGPU binding, layer and reference space, and the head's own yaw in the room
+let xrS = null, xrB, xrL, xrRef, hyaw = 0;
+// aim the camera from P6 = position + look-at point (in a headset the yaw is the room's: the head's comes on top)
 function aim() {
   const dx = P6[3] - P6[0], dy = P6[4] - P6[1], dz = P6[5] - P6[2];
   F[CX] = P6[0]; F[CY] = P6[1]; F[CZ] = P6[2];
-  F[YAW] = atan2(dx, -dz); F[PIT] = atan2(dy, sqrt(dx * dx + dz * dz));
+  F[YAW] = atan2(dx, -dz) - hyaw; F[PIT] = atan2(dy, sqrt(dx * dx + dz * dz));
 }
 const lookAt = (x, y, z, tx, ty, tz) => { P6[0] = x; P6[1] = y; P6[2] = z; P6[3] = tx; P6[4] = ty; P6[5] = tz; aim(); };
 // camera spline (Catmull-Rom over position + look-at) at parameter F[SPL]
@@ -333,19 +339,22 @@ Wd.glints = Wd.volD = Wd.gm = T.vb = T.ib = T.wp = T.wn = 0;
 const PIXMAX = 2560 * 1440, PIXMIN = mob ? 25e4 : 5e5, DETMIN = 0.4;
 let W = 0, H = 0, DW = 0, DH = 0, pix = +SV[1] || (LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = +SV[2] || 1, dynN = 0, dynT = 0, dynG = 0, dynGN = 0, dynBad = 0, dynOk = 0, dynWait = 3;
 let passScene, passRays, passBlur, bgBlur, passPost, bgRays, bgPost, bloomPass = [], bloomBG = [], targets = [];
+let xW = 0, xH = 0, vOut, bgOut; // headset: the size of one eye's image, and the finished picture before it is scaled to that
 const NB = 6;
 function resize() {
-  DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio));
+  if (xrS) { DW = xW; DH = xH; } else { DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio)); }
   const s = min(1, sqrt(pix / (DW * DH)));
   const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
   if (w === W && h === H) return;
   dynN = dynG = dynGN = 0; dynT = -300; // let the new size settle before measuring again
-  W = w; H = h; canvas.width = W; canvas.height = H;
-  ctx.configure({ device, format: FMT, alphaMode: 'opaque' });
+  W = w; H = h;
   for (const t of targets) t.destroy();
+  targets = [];
+  if (xrS) { const t = tex(W, H, FMT, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); targets.push(t); vOut = t.createView(); bgOut = blitBG(vOut); }
+  else { canvas.width = W; canvas.height = H; ctx.configure({ device, format: FMT, alphaMode: 'opaque' }); }
   const tMS = tex(AA > 1 ? W : 1, H, HDR, TU.RENDER_ATTACHMENT, { samples: AA }), tDp = tex(W, H, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, { samples: AA });
   const tRes = tex(W, H, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay2 = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
-  targets = [tMS, tDp, tRes, tRay, tRay2];
+  targets.push(tMS, tDp, tRes, tRay, tRay2);
   const bl = [];
   for (let i = 0; i < NB; i++) { const t = tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); bl.push(t); targets.push(t); }
   const vDp = tDp.createView(), vRes = tRes.createView(), vRay = tRay.createView(), vRay2 = tRay2.createView(), vBl = bl.map((t) => t.createView());
@@ -388,17 +397,18 @@ if (hasTS) {
 }
 
 // ---------------------------------------------------------------- frame
-let hud = false;
+let hud = false, PER = 1e3 / 60;
 let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
 const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, RAYS = 0.54;
-const submitList = [null];
+const submitList = [null], passX = { colorAttachments: [colorAtt(null, true)] };
+let pX; // scales the finished picture into the headset's image (made for its format when a session starts)
 const rowOrd = new Uint8Array(CELLS);
 // Draws the cells of a cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for the
 // terrain) as merged runs, nearest rows first.
 function drawCells(r, start, lo, hi, mar, indexed, verts, minD, maxD) {
-  const cx = F[CX], cy = F[CY], cz = F[CZ], fx = F[FX], fy = F[FY], fz = F[FZ], rx = F[RX], rz = F[RZ], ux = F[UX], uy = F[UY], uz = F[UZ];
+  const cx = F[CX], cy = F[CY], cz = F[CZ], fx = F[FX], fy = F[FY], fz = F[FZ], rx = F[RX], ry = F[RY], rz = F[RZ], ux = F[UX], uy = F[UY], uz = F[UZ];
   const ds = indexed === 1 ? 1 : det * det;
-  const tx = TANH * W / H, hw = CELLW * 0.5, ex = hw + mar, min2 = minD * minD * ds, max2 = maxD * maxD * ds;
+  const tx = F[TX], ty = F[TY], hw = CELLW * 0.5, ex = hw + mar, min2 = minD * minD * ds, max2 = maxD * maxD * ds;
   for (let k = 0; k < CELLS; k++) {
     const rw = rowOrd[k], row = rw * CELLS, pz = OZ + (rw + 0.5) * CELLW - cz, hz = max(abs(pz) - hw, 0);
     let run = -1;
@@ -410,7 +420,7 @@ function drawCells(r, start, lo, hi, mar, indexed, verts, minD, maxD) {
           const px = OX + (x + 0.5) * CELLW - cx, py = (l + h) * 0.5 - cy, ey = (h - l) * 0.5 + mar, hx = max(abs(px) - hw, 0), h2 = hx * hx + hz * hz;
           if (h2 < max2 && h2 >= min2) {
             const lim = px * fx + py * fy + pz * fz + ex * abs(fx) + ey * abs(fy) + ex * abs(fz);
-            if (lim >= 0 && abs(px * rx + pz * rz) - ex * (abs(rx) + abs(rz)) <= lim * tx) v = abs(px * ux + py * uy + pz * uz) - ex * (abs(ux) + abs(uz)) - ey * abs(uy) <= lim * TANH;
+            if (lim >= 0 && abs(px * rx + py * ry + pz * rz) - ex * (abs(rx) + abs(rz)) - ey * abs(ry) <= lim * tx) v = abs(px * ux + py * uy + pz * uz) - ex * (abs(ux) + abs(uz)) - ey * abs(uy) <= lim * ty;
           }
         }
       }
@@ -422,37 +432,70 @@ function drawCells(r, start, lo, hi, mar, indexed, verts, minD, maxD) {
     }
   }
 }
-function render() {
-  // camera basis (right vector is horizontal)
-  const cx = F[CX], cy = F[CY], cz = F[CZ], pitch = F[PIT], yaw = F[YAW];
-  const cp = cos(pitch), fy = sin(pitch), rx = cos(yaw), rz = sin(yaw), fx = cp * rz, fz = -cp * rx;
-  const ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
-  F[FX] = fx; F[FY] = fy; F[FZ] = fz; F[RX] = rx; F[RZ] = rz; F[UX] = ux; F[UY] = uy; F[UZ] = uz;
-  const asp = W / H, sx = 1 / (TANH * asp), sy = 1 / TANH, m = UB;
-  m[0] = rx * sx; m[4] = 0; m[8] = rz * sx; m[12] = -(rx * cx + rz * cz) * sx;
-  m[1] = ux * sy; m[5] = uy * sy; m[9] = uz * sy; m[13] = -(ux * cx + uy * cy + uz * cz) * sy;
+// Camera uniforms from the position F[CX..CZ] and the basis F[RX..RZ], F[UX..UZ], F[FX..FZ]. sx, sy scale the view and
+// ox, oy shift its centre (a headset's eyes look off-centre): clip = (right * sx - fwd * ox, up * sy - fwd * oy, NEAR, fwd)
+function setCam(sx, sy, ox, oy) {
+  const cx = F[CX], cy = F[CY], cz = F[CZ], fx = F[FX], fy = F[FY], fz = F[FZ], rx = F[RX], ry = F[RY], rz = F[RZ], ux = F[UX], uy = F[UY], uz = F[UZ];
+  const dr = rx * cx + ry * cy + rz * cz, du = ux * cx + uy * cy + uz * cz, df = fx * cx + fy * cy + fz * cz, m = UB;
+  m[0] = rx * sx - fx * ox; m[4] = ry * sx - fy * ox; m[8] = rz * sx - fz * ox; m[12] = df * ox - dr * sx;
+  m[1] = ux * sy - fx * oy; m[5] = uy * sy - fy * oy; m[9] = uz * sy - fz * oy; m[13] = df * oy - du * sy;
   m[2] = 0; m[6] = 0; m[10] = 0; m[14] = NEAR;
-  m[3] = fx; m[7] = fy; m[11] = fz; m[15] = -(fx * cx + fy * cy + fz * cz);
+  m[3] = fx; m[7] = fy; m[11] = fz; m[15] = -df;
   m[32] = cx; m[33] = cy; m[34] = cz; m[35] = F[TIME];
-  m[36] = rx; m[37] = 0; m[38] = rz; m[39] = TANH * asp;
-  m[40] = ux; m[41] = uy; m[42] = uz; m[43] = TANH;
-  m[44] = fx; m[45] = fy; m[46] = fz; m[47] = NEAR;
+  // for the shaders that turn a pixel back into a ray: fwd + right * x + up * y, the off-centre shift folded into fwd
+  ox /= sx; oy /= sy;
+  m[36] = rx; m[37] = ry; m[38] = rz; m[39] = 1 / sx;
+  m[40] = ux; m[41] = uy; m[42] = uz; m[43] = 1 / sy;
+  m[44] = fx + rx * ox + ux * oy; m[45] = fy + ry * ox + uy * oy; m[46] = fz + rz * ox + uz * oy; m[47] = NEAR;
+  F[TX] = 1 / sx + abs(ox); F[TY] = 1 / sy + abs(oy); // half-angle tangents for drawCells (the wider side)
   const zx = cx - PURPLE[0], zz = cz - PURPLE[1]; let zt = (44 - sqrt(zx * zx + zz * zz)) / 18; zt = zt < 0 ? 0 : zt > 1 ? 1 : zt;
   m[51] = zt * zt * (3 - 2 * zt);
   let ek = (-cy - 8) / 26; ek = ek < 0 ? 0 : ek > 1 ? 1 : ek;
-  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det;
+  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det; m[59] = xrS ? 0 : 0.55; // no vignette in a headset
+}
+function render() {
+  // camera basis (right vector is horizontal)
+  const pitch = F[PIT], yaw = F[YAW], cp = cos(pitch), fy = sin(pitch), rx = cos(yaw), rz = sin(yaw), fx = cp * rz, fz = -cp * rx;
+  F[FX] = fx; F[FY] = fy; F[FZ] = fz; F[RX] = rx; F[RY] = 0; F[RZ] = rz; F[UX] = -rz * fy; F[UY] = rz * fx - rx * fz; F[UZ] = rx * fy;
+  setCam(H / (TANH * W), 1 / TANH, 0, 0);
+  draw(ctx.getCurrentTexture().createView(), true, true);
+}
+// One picture for each eye of the headset. The eyes sit around the head, which is at F[CX..CZ]; the room is turned
+// by F[YAW]. Both eyes go through the same render targets, one after the other.
+function renderXR(pose) {
+  const h = pose.transform.matrix, c = cos(F[YAW]), s = sin(F[YAW]), px = F[CX], py = F[CY], pz = F[CZ], vs = pose.views, n = vs.length;
+  for (let i = 0; i < n; i++) {
+    const sub = xrB.getViewSubImage(xrL, vs[i]), vp = sub.viewport, m = vs[i].transform.matrix, p = vs[i].projectionMatrix;
+    if (!i && (vp.width !== xW || vp.height !== xH)) { xW = vp.width; xH = vp.height; resize(); }
+    const ex = m[12] - h[12], ez = m[14] - h[14];
+    F[CX] = px + c * ex - s * ez; F[CY] = py + m[13] - h[13]; F[CZ] = pz + s * ex + c * ez;
+    F[RX] = c * m[0] - s * m[2]; F[RY] = m[1]; F[RZ] = s * m[0] + c * m[2];
+    F[UX] = c * m[4] - s * m[6]; F[UY] = m[5]; F[UZ] = s * m[4] + c * m[6];
+    F[FX] = s * m[10] - c * m[8]; F[FY] = -m[9]; F[FZ] = -s * m[8] - c * m[10];
+    setCam(p[0], p[5], p[8], p[9]);
+    draw(vOut, !i, i === n - 1, sub);
+  }
+  F[CX] = px; F[CY] = py; F[CZ] = pz;
+}
+// Draws the view set by setCam into `out`; in a headset, then scales that into the eye's image `sub`. The water
+// texture is drawn with the `first` view of a frame, the GPU time is taken up to the `last`.
+let slot = null;
+function draw(out, first, last, sub) {
+  const cz = F[CZ];
   Q.writeBuffer(ubo, 0, UB);
-  WT[0] = F[TIME]; Q.writeBuffer(uboW, 0, WT);
-
   { let cr = floor((cz - OZ) / CELLW) | 0; cr = cr < 0 ? 0 : cr > CELLS - 1 ? CELLS - 1 : cr; let n = 0; rowOrd[n++] = cr; for (let d = 1; d < CELLS; d++) { if (cr - d >= 0) rowOrd[n++] = cr - d; if (cr + d < CELLS) rowOrd[n++] = cr + d; } }
   const e = device.createCommandEncoder();
-  let slot = null;
-  if (hasTS) { for (let i = 0; i < qRead.length; i++) if (!qRead[i].busy) { slot = qRead[i]; break; } }
-  waterPass[0].timestampWrites = slot ? tsBegin : undefined;
-  passPost.timestampWrites = slot ? tsEnd : undefined;
-  // animated water texture + mips
-  let r = e.beginRenderPass(waterPass[0]); r.setPipeline(pWater); r.setBindGroup(0, bgWater); r.draw(3); r.end();
-  for (let i = 1; i < 5; i++) { r = e.beginRenderPass(waterPass[i]); r.setPipeline(pMip16); r.setBindGroup(0, waterBG[i - 1]); r.draw(3); r.end(); }
+  let r;
+  if (first) {
+    slot = null;
+    if (hasTS) { for (let i = 0; i < qRead.length; i++) if (!qRead[i].busy) { slot = qRead[i]; break; } }
+    waterPass[0].timestampWrites = slot ? tsBegin : undefined;
+    // animated water texture + mips
+    WT[0] = F[TIME]; Q.writeBuffer(uboW, 0, WT);
+    r = e.beginRenderPass(waterPass[0]); r.setPipeline(pWater); r.setBindGroup(0, bgWater); r.draw(3); r.end();
+    for (let i = 1; i < 5; i++) { r = e.beginRenderPass(waterPass[i]); r.setPipeline(pMip16); r.setBindGroup(0, waterBG[i - 1]); r.draw(3); r.end(); }
+  }
+  const timed = last && slot;
   // scene
   r = e.beginRenderPass(passScene);
   r.setBindGroup(0, bg0);
@@ -491,12 +534,18 @@ function render() {
     r = e.beginRenderPass(bloomPass[i]); r.setPipeline(i === 0 ? pDown0 : i < NB ? pDown : pUp); r.setBindGroup(0, bloomBG[i]); r.draw(3); r.end();
   }
   // composite
-  passPost.colorAttachments[0].view = ctx.getCurrentTexture().createView();
+  passPost.colorAttachments[0].view = out; passPost.timestampWrites = timed && !sub ? tsEnd : undefined;
   r = e.beginRenderPass(passPost); r.setPipeline(pPost); r.setBindGroup(0, bgPost); r.draw(3); r.end();
-  if (slot) { e.resolveQuerySet(qs, 0, 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, 16); }
+  if (sub) {
+    // the headset's image is one layer of a texture array, valid for this frame only
+    const v = sub.viewport;
+    passX.colorAttachments[0].view = sub.colorTexture.createView(sub.getViewDescriptor()); passX.timestampWrites = timed ? tsEnd : undefined;
+    r = e.beginRenderPass(passX); r.setViewport(v.x, v.y, v.width, v.height, 0, 1); r.setPipeline(pX); r.setBindGroup(0, bgOut); r.draw(3); r.end();
+  }
+  if (timed) { e.resolveQuerySet(qs, 0, 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, 16); }
   submitList[0] = e.finish();
   Q.submit(submitList);
-  if (slot) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
+  if (timed) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
 }
 
 // CS[j] = distance to the rock (metres, < 0 in water) at the camera + CE[3j..3j+2]: the camera, then ±0.375 m on
@@ -528,50 +577,82 @@ function collide() {
   }
 }
 
-function frame(now) {
-  requestAnimationFrame(frame);
+// One frame, from the window or (with its XRFrame `xf`) from the headset while a session runs
+function frame(now, xf) {
+  if (!xf === !!xrS) return; // a late call from the loop that is not the current one
+  (xrS || self).requestAnimationFrame(frame);
+  const pose = xf && xf.getViewerPose(xrRef);
+  if (xf && !pose) return; // tracking lost
   const dtr = now - F[LAST]; F[LAST] = now;
   let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
-  // Dynamic resolution for 60 fps: every second (0.4 s behind the menu) scale the load by k
+  // Dynamic resolution for 60 fps (PER; a headset's own rate): every second (0.4 s behind the menu) scale the load by k
   if (dtr < 1e3 && (dynT += dtr) > 0 && (dynN++, dynT > (menu ? 400 : 1000))) {
     const a = dynT / dynN, g = dynGN ? dynG / dynGN : 0; let k = 1;
-    // with GPU timing: keep it between 9.8 and 13.6 ms
-    if (g) { if (g > 13.6 || g < 9.8) k = 11.7 / g; }
+    if (xrS && a < PER) PER = a; // a headset that does not tell its rate: the fastest second seen
+    // with GPU timing: keep it between 9.8 and 13.6 ms (at 60 fps)
+    if (g) { if (g > PER * 0.816 || g < PER * 0.588) k = PER * 0.702 / g; }
     // without: slow for two periods in a row means fewer pixels, and twice as long before trying to go back up
-    else if (a > 17.6) { dynOk = 0; if (++dynBad > 1) { k = 15 / a; dynBad = 0; dynWait = min(dynWait * 2, 60); } }
+    else if (a > PER * 1.056) { dynOk = 0; if (++dynBad > 1) { k = PER * 0.9 / a; dynBad = 0; dynWait = min(dynWait * 2, 60); } }
     // at the display's rate there is no telling if there is room, so try a little more now and then
-    else { dynBad = 0; if (a < 12.5) k = 15 / a; else if (++dynOk > dynWait) { k = 1.17; dynOk = 0; } }
+    else { dynBad = 0; if (a < PER * 0.75) k = PER * 0.9 / a; else if (++dynOk > dynWait) { k = 1.17; dynOk = 0; } }
     k = k < 0.5 ? 0.5 : k > 1.7 ? 1.7 : k; const top = min(PIXMAX, DW * DH), mid = max(top / 2, PIXMIN), was = pix + det;
     // too slow: pixels down to `mid` first, then draw distance, then the remaining pixels; faster goes back the same way
     if (k < 1 ? pix > mid || det <= DETMIN : pix < mid || det >= 1) {
       const end = k < 1 ? (det > DETMIN ? mid : PIXMIN) : det < 1 ? mid : top;
       pix *= k; if (k < 1 ? pix < end : pix > end) pix = end;
     } else { det *= sqrt(k); det = det < DETMIN ? DETMIN : det > 1 ? 1 : det; }
-    if (was !== pix + det) keep('abyssal', [LV, pix < top ? pix | 0 : '', det]); // nothing kept at full resolution
+    if (was !== pix + det && !xrS) keep('abyssal', [LV, pix < top ? pix | 0 : '', det]); // nothing kept at full resolution
     dynN = dynT = dynG = dynGN = 0; resize();
   }
   F[TIME] += dt;
   {
-    // touch: holding the finger away from where it went down keeps turning, like a joystick
-    if (tId >= 0) {
-      const tr = 4 / (innerWidth < innerHeight ? innerWidth : innerHeight); let jx = (tx - tx0) * tr, jy = (ty - ty0) * tr;
-      jx = jx > 1 ? 1 : jx < -1 ? -1 : jx; jy = jy > 1 ? 1 : jy < -1 ? -1 : jy;
-      lkx += jx * 1.5 * dt; lky += jy * dt;
+    const k = 1 - exp(-dt * 4.5);
+    let sp = ks, ax, ay, az, hx = 0, hy = 0, hz = 0; // faster?, the direction to swim in, the head's own movement
+    if (pose) {
+      // headset: left stick swims where the head looks (so does holding the trigger, or a pinch), right stick turns
+      // in steps and goes up / down, grip is faster, A / X jumps to the next viewpoint. The keyboard works as well.
+      const h = pose.transform.matrix;
+      hyaw = atan2(-h[8], h[10]);
+      if (xNew) { xNew = 0; F[YAW] -= hyaw; F[HX] = h[12]; F[HY] = h[13]; F[HZ] = h[14]; } // keep looking the way the screen did
+      let mf = kf - kb + xSel, mr = kr - kl, mu = ku - kd, tn = 0, jb = 0;
+      for (const i of xrS.inputSources) {
+        const p = i.gamepad; if (!p) continue;
+        const o = p.axes.length > 3 ? 2 : 0, b = p.buttons; let x = p.axes[o] || 0, y = p.axes[o + 1] || 0; // thumbstick, else touchpad
+        if (abs(x) < 0.15) x = 0; if (abs(y) < 0.15) y = 0;
+        if (i.handedness === 'left') { mr += x; mf -= y; } else { tn = x; mu -= y; }
+        if (b[1] && b[1].pressed) sp = 1; if (b[4] && b[4].pressed) jb = 1;
+      }
+      if (abs(tn) < 0.3) xTurn = 0; else if (!xTurn && abs(tn) > 0.6) { xTurn = 1; F[YAW] += tn > 0 ? PI / 6 : -PI / 6; }
+      if (jb && !xJump) { xPose = (xPose + 1) % 6; lookAt(...POSES[xPose]); } xJump = jb;
+      mf = mf > 1 ? 1 : mf < -1 ? -1 : mf; sp = sp ? 26 : 7;
+      const c = cos(F[YAW]), s = sin(F[YAW]), dx = h[12] - F[HX], dz = h[14] - F[HZ];
+      hx = c * dx - s * dz; hy = h[13] - F[HY]; hz = s * dx + c * dz; F[HX] = h[12]; F[HY] = h[13]; F[HZ] = h[14];
+      ax = ((s * h[10] - c * h[8]) * mf + (c * h[0] - s * h[2]) * mr) * sp; ay = (-h[9] * mf + h[1] * mr + mu) * sp; az = ((-s * h[8] - c * h[10]) * mf + (s * h[0] + c * h[2]) * mr) * sp;
+    } else {
+      // touch: holding the finger away from where it went down keeps turning, like a joystick
+      if (tId >= 0) {
+        const tr = 4 / (innerWidth < innerHeight ? innerWidth : innerHeight); let jx = (tx - tx0) * tr, jy = (ty - ty0) * tr;
+        jx = jx > 1 ? 1 : jx < -1 ? -1 : jx; jy = jy > 1 ? 1 : jy < -1 ? -1 : jy;
+        lkx += jx * 1.5 * dt; lky += jy * dt;
+      }
+      // mouse look through two cascaded low-pass stages
+      const kq = 1 - exp(-dt * 30); lkx += mdx * 0.0022; lky += mdy * 0.0022; mdx = 0; mdy = 0;
+      const lx = lkx * kq, ly = lky * kq; lkx -= lx; lky -= ly; l2x += lx; l2y += ly;
+      const dyw = l2x * kq, dpt = l2y * kq; l2x -= dyw; l2y -= dpt;
+      const yaw = F[YAW] + dyw; let pitch = F[PIT] - dpt; pitch = pitch < -1.55 ? -1.55 : pitch > 1.55 ? 1.55 : pitch;
+      F[YAW] = yaw; F[PIT] = pitch;
+      sp = sp || tN > 1 ? 26 : 7;
+      const mf = tId >= 0 ? 0.7 : kf - kb, mr = kr - kl, mu = ku - kd, cp = cos(pitch), sy = sin(yaw), cw = cos(yaw);
+      ax = (sy * cp * mf + cw * mr) * sp; ay = (sin(pitch) * mf + mu) * sp; az = (-cw * cp * mf + sy * mr) * sp;
     }
-    // mouse look through two cascaded low-pass stages
-    const kq = 1 - exp(-dt * 30); lkx += mdx * 0.0022; lky += mdy * 0.0022; mdx = 0; mdy = 0;
-    const ax = lkx * kq, ay = lky * kq; lkx -= ax; lky -= ay; l2x += ax; l2y += ay;
-    const dyw = l2x * kq, dpt = l2y * kq; l2x -= dyw; l2y -= dpt;
-    const yaw = F[YAW] + dyw; let pitch = F[PIT] - dpt; pitch = pitch < -1.55 ? -1.55 : pitch > 1.55 ? 1.55 : pitch;
-    const sp = ks || tN > 1 ? 26 : 7, k = 1 - exp(-dt * 4.5), mf = tId >= 0 ? 0.7 : kf - kb, mr = kr - kl, mu = ku - kd, cp = cos(pitch), sy = sin(yaw), cw = cos(yaw);
-    const vx = F[VX] + ((sy * cp * mf + cw * mr) * sp - F[VX]) * k, vy = F[VY] + ((sin(pitch) * mf + mu) * sp - F[VY]) * k, vz = F[VZ] + ((-cw * cp * mf + sy * mr) * sp - F[VZ]) * k;
-    let x = F[CX] + vx * dt, y = F[CY] + vy * dt, z = F[CZ] + vz * dt;
+    const vx = F[VX] + (ax - F[VX]) * k, vy = F[VY] + (ay - F[VY]) * k, vz = F[VZ] + (az - F[VZ]) * k;
+    let x = F[CX] + vx * dt + hx, y = F[CY] + vy * dt + hy, z = F[CZ] + vz * dt + hz;
     const rad = sqrt(x * x + z * z); if (rad > 150) { x *= 150 / rad; z *= 150 / rad; }
     y = y < -52 ? -52 : y > -1.2 ? -1.2 : y;
-    F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
+    F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
     collide();
   }
-  render();
+  if (pose) renderXR(pose); else render();
   if (hud) {
     hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
     F[HUDT] += dtr / 1000;
@@ -632,7 +713,41 @@ const go = () => {
 bDive.onclick = go; $('o').onclick = () => ui(true);
 // detail buttons: the current level is lit, the others reload the page with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssal', 2 - i); location.reload(); }; });
-document.addEventListener('pointerlockchange', () => ui(!document.pointerLockElement));
+document.addEventListener('pointerlockchange', () => xrS || ui(!document.pointerLockElement));
+
+// ---------------------------------------------------------------- headset (WebXR)
+// WebGPU reaches a headset through the WebXR/WebGPU binding: the session hands out one image per eye and frame, and
+// frame() draws the scene into each. The button is only there where the browser can do it.
+let xNew, xSel = 0, xTurn = 0, xJump = 0, xPose = 0, xSav;
+const bVR = $('v');
+bVR.hidden = !hasXR;
+$('x').hidden = hasXR || !hasVR; // a headset, but a browser that (as it is set up) lacks the binding
+bVR.onclick = async () => {
+  sound(); if (xrS) return ui(false); // behind the menu (Esc) the session is still running
+  try {
+    const s = await xr.requestSession('immersive-vr', { requiredFeatures: ['webgpu'] });
+    try {
+      xrB = new XRGPUBinding(s, device);
+      // the picture is written as it is for the screen: 8 bits, already gamma-encoded
+      let f = xrB.getPreferredColorFormat(); if (f !== 'rgba8unorm') f = 'bgra8unorm';
+      pX = device.createRenderPipeline({ layout: plBlit, vertex: { module: mBlit, entryPoint: 'vsX' }, fragment: { module: mBlit, entryPoint: 'fsX', targets: [{ format: f }] } });
+      xrL = xrB.createProjectionLayer({ colorFormat: f });
+      s.updateRenderState({ layers: [xrL] });
+      xrRef = await s.requestReferenceSpace('local');
+    } catch (e) { s.end(); throw e; }
+    s.onselectstart = () => xSel++; s.onselectend = () => xSel--;
+    s.onend = () => {
+      // back to the screen, looking where the head did, at the resolution the screen had
+      xrS = null; F[YAW] += hyaw; F[PIT] = hyaw = 0; pix = xSav[0]; det = xSav[1]; PER = 1e3 / 60; W = 0; resize();
+      ui(true); requestAnimationFrame(frame);
+    };
+    // two eyes: start at half the pixels each; frame() tunes them for the headset's rate from there
+    xSav = [pix, det]; pix = max(PIXMIN, pix / 2); PER = 1e3 / (s.frameRate || 72);
+    xrS = s; xNew = 1; xSel = xW = W = 0; F[PIT] = 0;
+    ui(false); bDive.textContent = 'Resume';
+    s.requestAnimationFrame(frame);
+  } catch (e) { console.error(e); bVR.textContent = 'VR failed: ' + e.message; }
+};
 
 // draw the first frame and wait for the GPU to finish it (pipelines get compiled on first use) before the reveal
 lookAt(...POSES[0]);

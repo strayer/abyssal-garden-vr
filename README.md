@@ -3,7 +3,7 @@
 **A dreamy underwater world you can swim through, right in your browser.**
 
 Towering kelp forests, sunbeams pouring through a rippling surface, a sunken ship, manta rays gliding overhead.
-And all of it is made by code: no images, no 3D models, no sound files. The whole world fits in **one 96 KB HTML file**.
+And all of it is made by code: no images, no 3D models, no sound files. The whole world fits in **one 101 KB HTML file**.
 
 ![Kelp forest with a stone whale tail and a manta ray](.github/screenshots/whale-fluke.jpg)
 
@@ -48,6 +48,27 @@ Nothing to install, and it works offline. It needs a browser with **WebGPU**. If
 The seabed, cliffs and arches are solid: you glide along the rock instead of swimming into it, and you still fit through every tunnel and arch. Kelp, plants, corals, sponges, loose rocks, the floating boulders, the ship and the whale tail you can swim through.
 
 **On a touchscreen:** hold one finger down to swim forward and slide it to steer. Put a second finger down to go faster. The `≡` button in the corner opens the menu. Phones always show the scene in landscape and start on Low or Medium detail. (Touch support is experimental.)
+
+## In a VR headset (experimental)
+
+Where the browser can show WebGPU in a headset, the menu has an **Enter VR** button. That takes the [WebXR/WebGPU binding](https://immersive-web.github.io/webxr-webgpu-binding/), which browsers still keep behind experimental settings:
+
+- **Meta Quest Browser** 146 or newer: turn on the WebXR experimental features in `chrome://flags`
+- **Chrome on Windows** with a PC headset: turn on *WebXR Projection Layers* and *WebXR/WebGPU Bindings* in `chrome://flags`
+- **Safari on visionOS** 26.2 or newer
+
+The page has to come from `https://` or `localhost` (WebXR does not work from a downloaded file). If the menu says *"VR needs the experimental WebXR + WebGPU flags of this browser"*, the headset was found but the binding is off.
+
+| | Controllers |
+|---|---|
+| Look around | Turn your head |
+| Swim | Left stick, in the direction you look; holding the trigger (or a pinch) swims forward |
+| Turn | Right stick left / right, in steps of 30° |
+| Up / down | Right stick forward / back |
+| Swim faster | Hold the grip |
+| Jump to the next viewpoint | `A` or `X` |
+
+The keyboard works as well, and leaning or walking moves you through the water. The resolution adapts to the headset's refresh rate the same way it does for 60 fps on a screen.
 
 ## Detail levels
 
