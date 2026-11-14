@@ -482,7 +482,11 @@ function renderXR(pose) {
     F[UX] = c * m[4] - s * m[6]; F[UY] = m[5]; F[UZ] = s * m[4] + c * m[6];
     F[FX] = s * m[10] - c * m[8]; F[FY] = -m[9]; F[FZ] = -s * m[8] - c * m[10];
     setCam(p[0], p[5], p[8], p[9]);
-    if (L) {
+    if (L && location.hash === '#gltest') {
+      // test: WebGL alone, no WebGPU in the frame; left eye magenta, right eye green
+      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
+      gl.clearColor(1 - i, i, 1 - i, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    } else if (L) {
       draw(xctx.getCurrentTexture().createView(), !i, i === n - 1);
       // x2d: by way of a 2D canvas, for browsers whose WebGL gets nothing out of a WebGPU canvas
       // Probed frames note the GL error after each step, and what the copied texture holds (read through a
