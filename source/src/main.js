@@ -502,10 +502,10 @@ function renderXR(pose) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, L.framebuffer);
       }
       gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
-      // the first second is plain magenta: seen in the headset, WebGL reaches it
-      if (xN < 60 || probe) { gl.clearColor(1, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+      // the first moment is plain magenta: seen in the headset, WebGL reaches it
+      if (xN < 30 || probe) { gl.clearColor(1, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
       if (probe) lg += ` clear ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${er()}`;
-      if (xN >= 60) gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (xN >= 30) gl.drawArrays(gl.TRIANGLES, 0, 3);
       if (probe) note(lg + ` draw ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${W}x${H}`);
     } else draw(vOut, !i, i === n - 1, sub);
   }
@@ -757,7 +757,8 @@ document.addEventListener('pointerlockchange', () => xrS || ui(!document.pointer
 // The WebGL side of that: a program that draws a canvas as a texture over the viewport, top row first.
 const glInit = () => {
   xc = document.createElement('canvas'); xctx = xc.getContext('webgpu'); c2 = document.createElement('canvas'); c2x = c2.getContext('2d');
-  const o = { xrCompatible: true, antialias: false, depth: false, alpha: false }, c = document.createElement('canvas');
+  // (context and layer as plain as every WebXR page makes them: with other options the layer came without an image)
+  const o = { xrCompatible: true }, c = document.createElement('canvas');
   gl = c.getContext('webgl2', o) || c.getContext('webgl', o);
   const p = gl.createProgram(), sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s); };
   sh(gl.VERTEX_SHADER, 'attribute vec2 p;varying vec2 u;void main(){u=vec2(p.x,-p.y)*.5+.5;gl_Position=vec4(p,0,1);}');
@@ -791,7 +792,7 @@ bVR.onclick = async () => {
       } else {
         xrB = null; if (!gl) glInit();
         await gl.makeXRCompatible(); note('compat: lost ' + gl.isContextLost() + ' e ' + gl.getError().toString(16));
-        s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl, { antialias: false, depth: false, stencil: false, alpha: false }) });
+        s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl) });
       }
       xrRef = await s.requestReferenceSpace('local');
     } catch (e) { s.end(); throw e; }
