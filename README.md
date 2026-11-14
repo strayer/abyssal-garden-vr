@@ -3,7 +3,7 @@
 **A dreamy underwater world you can swim through, right in your browser.**
 
 Towering kelp forests, sunbeams pouring through a rippling surface, a sunken ship, manta rays gliding overhead.
-And all of it is made by code: no images, no 3D models, no sound files. The whole world fits in **one 101 KB HTML file**.
+And all of it is made by code: no images, no 3D models, no sound files. The whole world fits in **one 103 KB HTML file**.
 
 ![Kelp forest with a stone whale tail and a manta ray](.github/screenshots/whale-fluke.jpg)
 
@@ -51,13 +51,12 @@ The seabed, cliffs and arches are solid: you glide along the rock instead of swi
 
 ## In a VR headset (experimental)
 
-Where the browser can show WebGPU in a headset, the menu has an **Enter VR** button. That takes the [WebXR/WebGPU binding](https://immersive-web.github.io/webxr-webgpu-binding/), which browsers still keep behind experimental settings:
+Where the browser has WebXR, the menu has an **Enter VR** button. The scene is drawn with WebGPU and reaches the headset in one of two ways:
 
-- **Meta Quest Browser** 146 or newer: turn on the WebXR experimental features in `chrome://flags`
-- **Chrome on Windows** with a PC headset: turn on *WebXR Projection Layers* and *WebXR/WebGPU Bindings* in `chrome://flags`
-- **Safari on visionOS** 26.2 or newer
+- **Through a WebGL session**, which works in any browser that has both WebXR and WebGPU. Each eye's finished picture is copied over to WebGL, which costs some speed.
+- **Through the [WebXR/WebGPU binding](https://immersive-web.github.io/webxr-webgpu-binding/)**, without that copy. It is used where the browser has it, which so far means experimental settings: the WebXR experimental features in `chrome://flags` of Meta Quest Browser 146 or newer, *WebXR Projection Layers* and *WebXR/WebGPU Bindings* in Chrome on Windows, or Safari on visionOS 26.2 or newer.
 
-The page has to come from `https://` or `localhost` (WebXR does not work from a downloaded file). If the menu says *"VR needs the experimental WebXR + WebGPU flags of this browser"*, the headset was found but the binding is off.
+Chromium on Linux may also need *Unsafe WebGPU Support* and *Vulkan* turned on in `chrome://flags` before the scene loads at all. The page has to come from `https://` or `localhost` (WebXR does not work from a downloaded file).
 
 | | Controllers |
 |---|---|

@@ -17,10 +17,10 @@ const say = (m, to, ms) => {
 };
 const fail = (m) => { throw new Error(m, { cause: 1 }); }; // cause marks a message that is shown as it is
 if (!navigator.gpu) fail('This scene needs WebGPU. Try a current Chrome or Edge.');
-// a headset can show the scene where the browser has the WebXR/WebGPU binding (see "headset" below); the graphics
-// adapter then has to be one the headset can use
-const xr = navigator.xr, hasVR = !!(xr && await xr.isSessionSupported('immersive-vr').catch(() => 0)), hasXR = hasVR && !!self.XRGPUBinding;
-const adapter = hasXR && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance', xrCompatible: true }).catch(() => 0)
+// a headset gets the scene through the WebXR/WebGPU binding where the browser has it, and through a WebGL session
+// otherwise (see "headset" below); for the binding the graphics adapter has to be one the headset can use
+const xr = navigator.xr, hasVR = !!(xr && await xr.isSessionSupported('immersive-vr').catch(() => 0)), hasB = hasVR && !!self.XRGPUBinding;
+const adapter = hasB && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance', xrCompatible: true }).catch(() => 0)
   || await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
 if (!adapter) fail('No WebGPU adapter found.');
 $('w').hidden = !!navigator.userAgentData; // only Chromium-based browsers have it
@@ -240,7 +240,7 @@ const flyPts = [];
 const F = new Float64Array(32), P6 = new Float64Array(6);
 const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24, RY = 25, TX = 26, TY = 27, HX = 28, HY = 29, HZ = 30;
 // headset state: the session, its WebGPU binding, layer and reference space, and the head's own yaw in the room
-let xrS = null, xrB, xrL, xrRef, hyaw = 0;
+let xrS = null, xrB, xrL, xrRef, hyaw = 0, gl, xc, xctx;
 // aim the camera from P6 = position + look-at point (in a headset the yaw is the room's: the head's comes on top)
 function aim() {
   const dx = P6[3] - P6[0], dy = P6[4] - P6[1], dz = P6[5] - P6[2];
@@ -350,8 +350,8 @@ function resize() {
   W = w; H = h;
   for (const t of targets) t.destroy();
   targets = [];
-  if (xrS) { const t = tex(W, H, FMT, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); targets.push(t); vOut = t.createView(); bgOut = blitBG(vOut); }
-  else { canvas.width = W; canvas.height = H; ctx.configure({ device, format: FMT, alphaMode: 'opaque' }); }
+  if (xrB) { const t = tex(W, H, FMT, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); targets.push(t); vOut = t.createView(); bgOut = blitBG(vOut); }
+  else { const c = xrS ? xc : canvas; c.width = W; c.height = H; (xrS ? xctx : ctx).configure({ device, format: FMT, alphaMode: 'opaque' }); }
   const tMS = tex(AA > 1 ? W : 1, H, HDR, TU.RENDER_ATTACHMENT, { samples: AA }), tDp = tex(W, H, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, { samples: AA });
   const tRes = tex(W, H, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay2 = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
   targets.push(tMS, tDp, tRes, tRay, tRay2);
@@ -461,11 +461,15 @@ function render() {
   draw(ctx.getCurrentTexture().createView(), true, true);
 }
 // One picture for each eye of the headset. The eyes sit around the head, which is at F[CX..CZ]; the room is turned
-// by F[YAW]. Both eyes go through the same render targets, one after the other.
+// by F[YAW]. Both eyes go through the same render targets, one after the other. Without the binding (xrB) the session
+// is a WebGL one: each eye is drawn to a WebGPU canvas of its own, which WebGL takes as a texture and draws into the
+// headset's framebuffer.
 function renderXR(pose) {
+  const L = xrB ? 0 : xrS.renderState.baseLayer;
+  if (L) gl.bindFramebuffer(gl.FRAMEBUFFER, L.framebuffer);
   const h = pose.transform.matrix, c = cos(F[YAW]), s = sin(F[YAW]), px = F[CX], py = F[CY], pz = F[CZ], vs = pose.views, n = vs.length;
   for (let i = 0; i < n; i++) {
-    const sub = xrB.getViewSubImage(xrL, vs[i]), vp = sub.viewport, m = vs[i].transform.matrix, p = vs[i].projectionMatrix;
+    const sub = L ? 0 : xrB.getViewSubImage(xrL, vs[i]), vp = L ? L.getViewport(vs[i]) : sub.viewport, m = vs[i].transform.matrix, p = vs[i].projectionMatrix;
     if (!i && (vp.width !== xW || vp.height !== xH)) { xW = vp.width; xH = vp.height; resize(); }
     const ex = m[12] - h[12], ez = m[14] - h[14];
     F[CX] = px + c * ex - s * ez; F[CY] = py + m[13] - h[13]; F[CZ] = pz + s * ex + c * ez;
@@ -473,7 +477,11 @@ function renderXR(pose) {
     F[UX] = c * m[4] - s * m[6]; F[UY] = m[5]; F[UZ] = s * m[4] + c * m[6];
     F[FX] = s * m[10] - c * m[8]; F[FY] = -m[9]; F[FZ] = -s * m[8] - c * m[10];
     setCam(p[0], p[5], p[8], p[9]);
-    draw(vOut, !i, i === n - 1, sub);
+    if (L) {
+      draw(xctx.getCurrentTexture().createView(), !i, i === n - 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, xc);
+      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    } else draw(vOut, !i, i === n - 1, sub);
   }
   F[CX] = px; F[CY] = py; F[CZ] = pz;
 }
@@ -717,28 +725,51 @@ document.addEventListener('pointerlockchange', () => xrS || ui(!document.pointer
 
 // ---------------------------------------------------------------- headset (WebXR)
 // WebGPU reaches a headset through the WebXR/WebGPU binding: the session hands out one image per eye and frame, and
-// frame() draws the scene into each. The button is only there where the browser can do it.
+// frame() draws the scene into each. Browsers without the binding get a WebGL session, into which the finished
+// pictures are copied (see renderXR).
+// The WebGL side of that: a program that draws a canvas as a texture over the viewport, top row first.
+const glInit = () => {
+  xc = document.createElement('canvas'); xctx = xc.getContext('webgpu');
+  const o = { xrCompatible: true, antialias: false, depth: false, alpha: false }, c = document.createElement('canvas');
+  gl = c.getContext('webgl2', o) || c.getContext('webgl', o);
+  const p = gl.createProgram(), sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s); };
+  sh(gl.VERTEX_SHADER, 'attribute vec2 p;varying vec2 u;void main(){u=vec2(p.x,-p.y)*.5+.5;gl_Position=vec4(p,0,1);}');
+  sh(gl.FRAGMENT_SHADER, 'precision mediump float;uniform sampler2D t;varying vec2 u;void main(){gl_FragColor=vec4(texture2D(t,u).rgb,1);}');
+  gl.bindAttribLocation(p, 0, 'p'); gl.linkProgram(p); gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  gl.enable(gl.SCISSOR_TEST);
+};
 let xNew, xSel = 0, xTurn = 0, xJump = 0, xPose = 0, xSav;
 const bVR = $('v');
-bVR.hidden = !hasXR;
-$('x').hidden = hasXR || !hasVR; // a headset, but a browser that (as it is set up) lacks the binding
+bVR.hidden = !hasVR;
 bVR.onclick = async () => {
   sound(); if (xrS) return ui(false); // behind the menu (Esc) the session is still running
   try {
-    const s = await xr.requestSession('immersive-vr', { requiredFeatures: ['webgpu'] });
+    // with the binding where the browser has it and lets a session use it
+    const sb = hasB && await xr.requestSession('immersive-vr', { requiredFeatures: ['webgpu'] }).catch(() => 0);
+    const s = sb || await xr.requestSession('immersive-vr');
     try {
-      xrB = new XRGPUBinding(s, device);
-      // the picture is written as it is for the screen: 8 bits, already gamma-encoded
-      let f = xrB.getPreferredColorFormat(); if (f !== 'rgba8unorm') f = 'bgra8unorm';
-      pX = device.createRenderPipeline({ layout: plBlit, vertex: { module: mBlit, entryPoint: 'vsX' }, fragment: { module: mBlit, entryPoint: 'fsX', targets: [{ format: f }] } });
-      xrL = xrB.createProjectionLayer({ colorFormat: f });
-      s.updateRenderState({ layers: [xrL] });
+      if (sb) {
+        xrB = new XRGPUBinding(s, device);
+        // the picture is written as it is for the screen: 8 bits, already gamma-encoded
+        let f = xrB.getPreferredColorFormat(); if (f !== 'rgba8unorm') f = 'bgra8unorm';
+        pX = device.createRenderPipeline({ layout: plBlit, vertex: { module: mBlit, entryPoint: 'vsX' }, fragment: { module: mBlit, entryPoint: 'fsX', targets: [{ format: f }] } });
+        xrL = xrB.createProjectionLayer({ colorFormat: f });
+        s.updateRenderState({ layers: [xrL] });
+      } else {
+        xrB = null; if (!gl) glInit();
+        await gl.makeXRCompatible();
+        s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl, { antialias: false, depth: false, stencil: false, alpha: false }) });
+      }
       xrRef = await s.requestReferenceSpace('local');
     } catch (e) { s.end(); throw e; }
     s.onselectstart = () => xSel++; s.onselectend = () => xSel--;
     s.onend = () => {
       // back to the screen, looking where the head did, at the resolution the screen had
-      xrS = null; F[YAW] += hyaw; F[PIT] = hyaw = 0; pix = xSav[0]; det = xSav[1]; PER = 1e3 / 60; W = 0; resize();
+      xrS = xrB = null; F[YAW] += hyaw; F[PIT] = hyaw = 0; pix = xSav[0]; det = xSav[1]; PER = 1e3 / 60; W = 0; resize();
       ui(true); requestAnimationFrame(frame);
     };
     // two eyes: start at half the pixels each; frame() tunes them for the headset's rate from there
