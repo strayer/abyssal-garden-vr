@@ -27,7 +27,7 @@ $('w').hidden = !!navigator.userAgentData; // only Chromium-based browsers have 
 const hasTS = adapter.features.has('timestamp-query');
 const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query'] : [] });
 // what went wrong in a headset can only be read afterwards: the first few notes are shown in the menu when a session ends
-const xLog = [], note = (m) => { console.error(m); if (xLog.length < 8) xLog.push(('' + m).slice(0, 160)); };
+const xLog = [], note = (m) => { console.error(m); if (xLog.length < 9) xLog.push(('' + m).slice(0, 200)); };
 device.addEventListener('uncapturederror', (e) => note('GPU: ' + e.error.message));
 addEventListener('error', (e) => note('JS: ' + e.message + ' @' + e.lineno));
 addEventListener('unhandledrejection', (e) => note('JS: ' + (e.reason && e.reason.message || e.reason)));
@@ -244,7 +244,7 @@ const flyPts = [];
 const F = new Float64Array(32), P6 = new Float64Array(6);
 const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24, RY = 25, TX = 26, TY = 27, HX = 28, HY = 29, HZ = 30;
 // headset state: the session, its WebGPU binding, layer and reference space, and the head's own yaw in the room
-let xrS = null, xrB, xrL, xrRef, hyaw = 0, gl, xc, xctx, c2, c2x, x2d = 0, xN = 0, xNull = 0;
+let xrS = null, xrB, xrL, xrRef, hyaw = 0, gl, xc, xctx, c2, c2x, xTex, xFB, x2d = 0, xN = 0, xNull = 0;
 const xPx = new Uint8Array(4);
 // aim the camera from P6 = position + look-at point (in a headset the yaw is the room's: the head's comes on top)
 function aim() {
@@ -485,18 +485,28 @@ function renderXR(pose) {
     if (L) {
       draw(xctx.getCurrentTexture().createView(), !i, i === n - 1);
       // x2d: by way of a 2D canvas, for browsers whose WebGL gets nothing out of a WebGPU canvas
+      // Probed frames note the GL error after each step, and what the copied texture holds (read through a
+      // framebuffer of its own, as the headset's may not be readable).
+      const probe = !i && (xN === 5 || xN === 70 || xN === 130), er = () => gl.getError().toString(16);
+      const rd = (x, y) => (gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, xPx), xPx.slice(0, 3).join('.'));
+      let lg = ''; if (probe) lg = `f${xN} ${x2d ? '2d' : 'direct'} lost ${gl.isContextLost()} fb ${gl.checkFramebufferStatus(gl.FRAMEBUFFER).toString(16)} e ${er()}`;
       if (x2d) { if (c2.width !== W || c2.height !== H) { c2.width = W; c2.height = H; } c2x.drawImage(xc, 0, 0); }
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, x2d ? c2 : xc);
-      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
-      // now and then look at what arrives: a cleared pixel first (can this be read at all?), then three of the picture
-      const probe = !i && (xN === 20 || xN === 50 || xN === 80), rd = (k) => (gl.readPixels(vp.x + vp.width * k | 0, vp.y + vp.height * k | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, xPx), xPx.slice(0, 3).join('.'));
-      let pc; if (probe) { gl.clearColor(1, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); pc = rd(0.5); }
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
       if (probe) {
-        const a = rd(0.3), b = rd(0.5), c = rd(0.7);
-        note(`f${xN} ${x2d ? '2d' : 'direct'} clear ${pc} pic ${a} ${b} ${c} gl ${gl.getError()} ${W}x${H} in ${vp.width}x${vp.height}`);
-        if (a + b + c === '0.0.00.0.00.0.0' && !x2d) x2d = 1;
+        lg += ` tex ${er()}`;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, xFB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, xTex, 0);
+        gl.disable(gl.SCISSOR_TEST);
+        const t = rd(W * 0.3 | 0, H * 0.3 | 0) + ' ' + rd(W >> 1, H >> 1) + ' ' + rd(W * 0.7 | 0, H * 0.7 | 0);
+        gl.enable(gl.SCISSOR_TEST);
+        lg += ` texpix ${t} ${er()}`; if (t === '0.0.0 0.0.0 0.0.0' && !x2d) x2d = 1;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, L.framebuffer);
       }
+      gl.viewport(vp.x, vp.y, vp.width, vp.height); gl.scissor(vp.x, vp.y, vp.width, vp.height);
+      // the first second is plain magenta: seen in the headset, WebGL reaches it
+      if (xN < 60 || probe) { gl.clearColor(1, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+      if (probe) lg += ` clear ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${er()}`;
+      if (xN >= 60) gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (probe) note(lg + ` draw ${er()} ${rd(vp.x + (vp.width >> 1), vp.y + (vp.height >> 1))} ${W}x${H}`);
     } else draw(vOut, !i, i === n - 1, sub);
   }
   xN++;
@@ -756,7 +766,8 @@ const glInit = () => {
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) note('GL: ' + gl.getProgramInfoLog(p));
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+  gl.bindTexture(gl.TEXTURE_2D, xTex = gl.createTexture()); xFB = gl.createFramebuffer();
+  note('GL: ' + (self.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext ? 2 : 1) + ' ' + gl.getParameter(gl.VERSION) + ' e ' + gl.getError().toString(16));
   for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
   gl.enable(gl.SCISSOR_TEST);
 };
@@ -779,7 +790,7 @@ bVR.onclick = async () => {
         s.updateRenderState({ layers: [xrL] });
       } else {
         xrB = null; if (!gl) glInit();
-        await gl.makeXRCompatible();
+        await gl.makeXRCompatible(); note('compat: lost ' + gl.isContextLost() + ' e ' + gl.getError().toString(16));
         s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl, { antialias: false, depth: false, stencil: false, alpha: false }) });
       }
       xrRef = await s.requestReferenceSpace('local');
